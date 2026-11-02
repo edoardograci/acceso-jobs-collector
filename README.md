@@ -9,7 +9,7 @@ Manual LinkedIn job discovery for the Acceso admin workspace. Scraping and HTML 
 
 ## Manual run
 
-Open **Actions → Collect LinkedIn jobs → Run workflow**. Start with one page, 12 jobs and three companies. Keep **Send results to the admin review workspace** off for a dry run. Download the `collection-result` artifact and inspect `result.json`; the workflow summary reports counts, missing details and coverage warnings. Results are retained for one day. The repository contains no collected jobs, employer watchlist or credentials.
+Open **Actions → Collect LinkedIn jobs → Run workflow**. Start with one page, 12 jobs and three companies. Keep **Send results to the admin review workspace** off for a dry run. Download the `collection-result` artifact and inspect `result.json`; the workflow summary reports counts, missing details and coverage warnings. Results are retained for one day. The repository contains no collected jobs or credentials. A small bootstrap map of 114 public LinkedIn company IDs reuses earlier resolutions; the active watchlist is read from R2. For a targeted company check, optionally enter its active watchlist slug in the workflow form.
 
 Repository variables `JOBS_WATCHLIST_URL` and `JOBS_STATE_URL` point to the public R2 JSON exports. For automatic delivery later, set variable `JOBS_INGEST_URL` to the website's `/api/jobs-collector` endpoint and encrypted Actions secret `JOBS_INGEST_TOKEN` to the same random secret in the website's server settings. Do not put the secret in source code, variables, public JSON or logs. The collector needs no R2 access keys and cannot approve jobs or edit the watchlist.
 

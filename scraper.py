@@ -376,10 +376,14 @@ def collect(watchlist, max_companies=5, browser="auto", pages=3, max_jobs=300, p
 
 
 def load_cache(path):
-    if not path.exists():return {'companies':{},'jobs':{}}
-    value=json.loads(path.read_text(encoding='utf-8'))
+    value=json.loads(path.read_text(encoding='utf-8')) if path.exists() else {'companies':{},'jobs':{}}
     if not isinstance(value.get('companies'),dict) or not isinstance(value.get('jobs'),dict):
         raise CollectionError('Collector cache is invalid; preserve it for recovery before starting again.')
+    seeds=ROOT/'data/company-ids.json'
+    if seeds.exists():
+        for slug,numeric in json.loads(seeds.read_text(encoding='utf-8')).items():
+            if COMPANY_PATH.fullmatch('/company/'+slug+'/') and re.fullmatch(r'\d{1,20}',str(numeric)):
+                value['companies'].setdefault(slug,{}).setdefault('numericId',str(numeric))
     return value
 
 
@@ -438,6 +442,7 @@ def main():
     parser.add_argument('--mode', choices=['search', 'companies'], default='search')
     parser.add_argument('--keywords-json', default=os.getenv('JOBS_KEYWORDS_JSON', ''))
     parser.add_argument('--location', default=os.getenv('JOBS_LOCATION', ''))
+    parser.add_argument('--company', default=os.getenv('JOBS_COMPANY',''), help='Optional active watchlist company slug for a targeted extra scrape')
     parser.add_argument("--max-companies", type=int, default=5)
     parser.add_argument("--max-jobs", type=int, default=300)
     parser.add_argument("--pages", type=int, default=3)
@@ -457,6 +462,9 @@ def main():
         watchlist = response.json()
     else:
         watchlist = json.loads(args.watchlist.read_text(encoding="utf-8-sig"))
+    if args.company:
+        if args.mode != 'companies': raise CollectionError('A targeted company requires companies mode')
+        watchlist = {**watchlist, 'companies':[c for c in watchlist['companies'] if company_url(c['url']).split('/')[4] == args.company]}
     if args.mode == 'companies' and not companies_from(watchlist):
         raise CollectionError("Watchlist has no active companies. Add companies in the admin panel first.")
     known=set()

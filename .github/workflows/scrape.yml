@@ -12,6 +12,10 @@ on:
         description: Companies per manual batch (company mode only)
         default: '5'
         type: string
+      company:
+        description: Optional active watchlist company slug for a targeted extra scrape
+        default: ''
+        type: string
       pages:
         description: Maximum result pages per keyword or company
         default: '3'
@@ -80,6 +84,7 @@ jobs:
           JOBS_INGEST_TOKEN: ${{ secrets.JOBS_INGEST_TOKEN }}
           JOBS_KEYWORDS_JSON: ${{ inputs.keywords_json }}
           JOBS_LOCATION: ${{ inputs.location }}
+          JOBS_COMPANY: ${{ inputs.company }}
           JOBS_REQUEST_ID: ${{ inputs.request_id }}
           MODE: ${{ inputs.mode }}
           MAX_COMPANIES: ${{ inputs.max_companies }}
