@@ -90,6 +90,7 @@ class ScraperTests(unittest.TestCase):
         fetcher.close()
 
     def test_company_validation_and_pause(self):
+        self.assertEqual(len(companies_from({'version':1,'companies':[{**COMPANY,'url':'https://www.linkedin.com/company/studio-%c3%a9/'}]})),1)
         self.assertEqual(len(companies_from({"version": 1, "companies": [COMPANY]})), 1)
         self.assertEqual(companies_from({"version": 1, "companies": [{**COMPANY, "enabled": False}]}), [])
         with self.assertRaises(CollectionError): companies_from({"version": 1, "companies": [{**COMPANY, "url": "https://evil.test/"}]})

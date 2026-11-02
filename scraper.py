@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parent
 DESIGN_SIGNAL = re.compile(r"design|\bcmf\b|sculpt|modeller|modeler|modelmak|footwear|packaging|\bcad\b", re.I)
 SEARCH_TERMS = 'designer OR "industrial design" OR CMF OR sculptor OR modeler OR modeller OR modelmaker OR CAD OR packaging OR footwear'
 DEFAULT_KEYWORDS = ['industrial designer', 'CMF designer', 'footwear designer', 'structural packaging designer']
-COMPANY_PATH = re.compile(r"^/company/([a-z0-9_-]+)(?:/(?:jobs|about|posts))?/?$", re.I)
+COMPANY_PATH = re.compile(r"^/company/([a-z0-9_-]+(?:%[0-9a-f]{2}[a-z0-9_-]*)*)(?:/(?:jobs|about|posts))?/?$", re.I)
 
 
 class CollectionError(RuntimeError):
