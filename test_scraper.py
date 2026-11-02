@@ -108,6 +108,8 @@ class ScraperTests(unittest.TestCase):
         self.assertEqual(detail["companyId"], "fixture")
         self.assertIn("physical products", detail["description"])
         self.assertEqual(application_url(BeautifulSoup('<a class="apply-button" href="javascript:evil()">Apply</a>', 'html.parser'), 'safe'), 'safe')
+        self.assertEqual(application_url(BeautifulSoup('<a class="apply-button" href="https://www.linkedin.com/signup/cold-join?x=1">Apply</a>','html.parser'),'canonical-job'),'canonical-job')
+        self.assertEqual(application_url(BeautifulSoup('<a class="apply-button" href="https://www.linkedin.com/signup/cold-join">Apply</a><code id="applyUrl">"https://careers.example/direct"</code>','html.parser'),'canonical-job'),'https://careers.example/direct')
 
     def test_blocked_pages_and_missing_description(self):
         self.assertTrue(wall('<title>Just a moment...</title>'))

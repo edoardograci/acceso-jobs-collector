@@ -74,7 +74,7 @@ def wall(html):
 
 
 class Fetcher:
-    def __init__(self, browser="auto", pause=2.0):
+    def __init__(self, browser="auto", pause=4.0):
         self.mode, self.pause = browser, pause
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36", "Accept-Language": "en-US,en;q=0.9"})
@@ -179,14 +179,16 @@ def application_url(soup, fallback):
     link = soup.select_one("a.apply-button, a.topcard__link--apply, a[data-tracking-control-name*='apply-link']")
     # LinkedIn public details sometimes store the external destination in a hidden element.
     hidden = soup.select_one("#applyUrl")
-    value = link.get("href", "") if link else hidden.get_text(strip=True) if hidden else ""
-    value = value.strip().strip('"')
-    if value.startswith("/"):
-        value = urljoin("https://www.linkedin.com", value)
-    query = parse_qs(urlparse(value).query)
-    value = query.get("url", [value])[0]
-    parsed = urlparse(value)
-    return value if parsed.scheme == "https" and parsed.hostname and not parsed.username and not parsed.password else fallback
+    for value in ([hidden.get_text(strip=True)] if hidden else []) + ([link.get('href','')] if link else []):
+        value = value.strip().strip('"')
+        if value.startswith('/'):
+            value = urljoin('https://www.linkedin.com', value)
+        value = parse_qs(urlparse(value).query).get('url', [value])[0]
+        parsed = urlparse(value)
+        if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password: continue
+        if re.fullmatch(r'(?:[a-z]{2,3}\.)?linkedin\.com', parsed.hostname, re.I) and not parsed.path.startswith('/jobs/view/'): continue
+        return value
+    return fallback
 
 
 def parse_detail(html, card, company):
@@ -198,7 +200,7 @@ def parse_detail(html, card, company):
     employer = soup.select_one(".topcard__org-name-link")
     location = soup.select_one(".topcard__flavor--bullet")
     source = f"https://www.linkedin.com/jobs/view/{card['id']}/"
-    description = markup.get_text("\n", strip=True)[:6000]
+    description = markup.get_text("\n", strip=True)[:12000]
     if re.search(r"no longer accepting applications|this job is no longer available", soup.get_text(" ", strip=True), re.I):
         description = "No longer accepting applications.\n" + description
     slug = company.get('id') or card.get('companyId', '')
@@ -218,7 +220,7 @@ def parse_detail(html, card, company):
     return {**card, **criteria, "companyLogo": logo_url, "companyUrl": f'https://www.linkedin.com/company/{slug}/' if slug else '', "detailComplete": True, "companyId": slug, "title": title.get_text(" ", strip=True) if title else card["title"], "company": employer.get_text(" ", strip=True) if employer else card["company"], "location": location.get_text(" ", strip=True) if location else card["location"], "sourceUrl": source, "applicationUrl": application_url(soup, source), "description": description}
 
 
-def collect_search(watchlist, keywords=None, location='', browser='auto', pages=3, max_jobs=100, pause=2.0, fetcher=None, cache=None, known_ids=None):
+def collect_search(watchlist, keywords=None, location='', browser='auto', pages=3, max_jobs=100, pause=4.0, fetcher=None, cache=None, known_ids=None):
     """Primary discovery is independent of employer membership in the watchlist."""
     keywords = keywords or DEFAULT_KEYWORDS
     if not isinstance(keywords, list) or not 1 <= len(keywords) <= 8 or any(not isinstance(k, str) or not k.strip() or len(k) > 100 for k in keywords):
@@ -279,7 +281,7 @@ def collect_search(watchlist, keywords=None, location='', browser='auto', pages=
     return {'items': items, 'run': run}
 
 
-def collect(watchlist, max_companies=5, browser="auto", pages=3, max_jobs=300, pause=2.0, fetcher=None, cache=None, known_ids=None, shard=0, shards=1):
+def collect(watchlist, max_companies=5, browser="auto", pages=3, max_jobs=300, pause=4.0, fetcher=None, cache=None, known_ids=None, shard=0, shards=1):
     cache = cache if cache is not None else {"companies": {}, "jobs": {}}
     cache.setdefault('companies', {}); cache.setdefault('jobs', {})
     known_ids = set(known_ids or [])
@@ -434,7 +436,7 @@ def main():
     parser.add_argument("--max-jobs", type=int, default=300)
     parser.add_argument("--pages", type=int, default=3)
     parser.add_argument("--browser", choices=["auto", "always", "never"], default="auto")
-    parser.add_argument("--pause", type=float, default=2.0)
+    parser.add_argument("--pause", type=float, default=4.0)
     parser.add_argument("--submit", action="store_true")
     parser.add_argument('--state-url',default=os.getenv('JOBS_STATE_URL'))
     parser.add_argument('--cache',type=Path,default=ROOT/'output/collector-cache.json')

@@ -15,7 +15,7 @@ Repository variables `JOBS_WATCHLIST_URL` and `JOBS_STATE_URL` point to the publ
 
 ## Limits and behavior
 
-One run at a time; a 50-minute workflow timeout; a 40-minute collection budget; at least two seconds between requests. Requests stop without retry on HTTP 429. Public browser fallback is optional and stops at login/challenge pages. Cached complete company-job details avoid repeat fetching. Approved/discarded or complete known records skip detail requests. Incomplete records remain eligible for enrichment. Descriptions are capped at 6,000 characters. Company logos are LinkedIn CDN URLs and may expire. Missing fields are retained for review, never invented. Failed fetches never remove saved jobs.
+One run at a time; a 50-minute workflow timeout; a 40-minute collection budget; at least four seconds between requests. Requests stop without retry on HTTP 429. Public browser fallback is optional and stops at login/challenge pages. Cached complete company-job details avoid repeat fetching. Approved/discarded or complete known records skip detail requests. Incomplete records remain eligible for enrichment. Descriptions are capped at 12,000 characters. Company logos are LinkedIn CDN URLs and may expire. Missing fields are retained for review, never invented. Failed fetches never remove saved jobs.
 
 Source access may vary by IP address and time. Local success does not guarantee GitHub-hosted access. Partial coverage and blocks are reported in run errors. There is no guarantee of complete LinkedIn coverage or unlimited source requests. Standard GitHub-hosted runners in public repositories follow GitHub's public-repository billing allowances; caches, artifacts and storage still have limits.
 
