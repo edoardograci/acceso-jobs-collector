@@ -1,0 +1,106 @@
+name: Collect LinkedIn jobs
+run-name: Jobs ${{ inputs.mode }} · ${{ inputs.request_id || github.run_id }}
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Primary keyword search or extra company watchlist
+        type: choice
+        options: [search, companies]
+        default: search
+      max_companies:
+        description: Companies per manual batch (company mode only)
+        default: '5'
+        type: string
+      pages:
+        description: Maximum result pages per keyword or company
+        default: '3'
+        type: string
+      max_jobs:
+        description: Maximum new job candidates
+        default: '100'
+        type: string
+      keywords_json:
+        description: JSON array of primary search keywords
+        default: '["industrial designer","CMF designer","footwear designer","structural packaging designer"]'
+        type: string
+      location:
+        description: Location (blank means worldwide)
+        default: ''
+        type: string
+      submit:
+        description: Send results to the admin review workspace
+        default: false
+        type: boolean
+      browser:
+        description: Public-page browser fallback
+        type: choice
+        options: [auto, never]
+        default: auto
+      request_id:
+        description: Optional admin request identifier
+        default: ''
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: linkedin-jobs-collector
+  cancel-in-progress: false
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Test extraction and failure handling
+        run: python -m unittest test_scraper.py -v
+      - name: Install optional public-page browser
+        if: inputs.browser == 'auto'
+        run: |
+          python -m playwright install-deps firefox
+          python -m camoufox fetch
+      - uses: actions/cache/restore@v4
+        with:
+          path: output/collector-cache.json
+          key: collector-v3-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: collector-v3-
+      - name: Collect public listings
+        env:
+          JOBS_WATCHLIST_URL: ${{ vars.JOBS_WATCHLIST_URL }}
+          JOBS_STATE_URL: ${{ vars.JOBS_STATE_URL }}
+          JOBS_INGEST_URL: ${{ vars.JOBS_INGEST_URL }}
+          JOBS_INGEST_TOKEN: ${{ secrets.JOBS_INGEST_TOKEN }}
+          JOBS_KEYWORDS_JSON: ${{ inputs.keywords_json }}
+          JOBS_LOCATION: ${{ inputs.location }}
+          JOBS_REQUEST_ID: ${{ inputs.request_id }}
+          MODE: ${{ inputs.mode }}
+          MAX_COMPANIES: ${{ inputs.max_companies }}
+          MAX_JOBS: ${{ inputs.max_jobs }}
+          PAGES: ${{ inputs.pages }}
+          BROWSER: ${{ inputs.browser }}
+          SUBMIT: ${{ inputs.submit }}
+        run: |
+          args=(--mode "$MODE" --max-companies "$MAX_COMPANIES" --max-jobs "$MAX_JOBS" --pages "$PAGES" --browser "$BROWSER")
+          if [ "$SUBMIT" = "true" ]; then args+=(--submit); fi
+          python scraper.py "${args[@]}"
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: output/collector-cache.json
+          key: collector-v3-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Keep collection output for review and recovery
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: collection-result
+          path: output/result.json
+          if-no-files-found: ignore
+          retention-days: 1
