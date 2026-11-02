@@ -6,7 +6,7 @@ on:
       mode:
         description: Primary keyword search or extra company watchlist
         type: choice
-        options: [search, companies]
+        options: [search, companies, verify, maintenance]
         default: search
       max_companies:
         description: Companies per manual batch (company mode only)
@@ -40,7 +40,7 @@ on:
         description: Public-page browser fallback
         type: choice
         options: [auto, never]
-        default: auto
+        default: never
       request_id:
         description: Optional admin request identifier
         default: ''
@@ -55,27 +55,23 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 50
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.12'
           cache: pip
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
       - name: Test extraction and failure handling
-        run: python -m unittest test_scraper.py -v
+        run: python -m unittest discover -p "test_*.py" -v
       - name: Install optional public-page browser
         if: inputs.browser == 'auto'
         run: |
+          python -m pip install -r requirements-browser.txt
           python -m playwright install-deps firefox
           python -m camoufox fetch
-      - uses: actions/cache/restore@v4
-        with:
-          path: output/collector-cache.json
-          key: collector-v3-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: collector-v3-
       - name: Collect public listings
         env:
           JOBS_WATCHLIST_URL: ${{ vars.JOBS_WATCHLIST_URL }}
@@ -96,16 +92,11 @@ jobs:
           args=(--mode "$MODE" --max-companies "$MAX_COMPANIES" --max-jobs "$MAX_JOBS" --pages "$PAGES" --browser "$BROWSER")
           if [ "$SUBMIT" = "true" ]; then args+=(--submit); fi
           python scraper.py "${args[@]}"
-      - uses: actions/cache/save@v4
-        if: always()
-        with:
-          path: output/collector-cache.json
-          key: collector-v3-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Keep collection output for review and recovery
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: collection-result
-          path: output/result.json
+          path: output/*.json
           if-no-files-found: ignore
           retention-days: 1

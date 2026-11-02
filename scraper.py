@@ -18,6 +18,10 @@ import uuid
 from bs4 import BeautifulSoup
 import requests
 
+# Keep exception identities identical when the CLI imports the runtime engine.
+if __name__ == '__main__':
+    sys.modules['scraper'] = sys.modules[__name__]
+
 ROOT = Path(__file__).resolve().parent
 DESIGN_SIGNAL = re.compile(r"design|\bcmf\b|sculpt|modeller|modeler|modelmak|footwear|packaging|\bcad\b", re.I)
 SEARCH_TERMS = 'designer OR "industrial design" OR CMF OR sculptor OR modeler OR modeller OR modelmaker OR CAD OR packaging OR footwear'
@@ -30,6 +34,9 @@ class CollectionError(RuntimeError):
 
 
 class RateLimited(CollectionError):
+    pass
+
+class AccessBlocked(CollectionError):
     pass
 
 
@@ -89,7 +96,7 @@ class Fetcher:
         if self.mode != "always":
             response = None
             try:
-                response = self.session.get(url, timeout=20, allow_redirects=True)
+                response = self.session.get(url, timeout=20, allow_redirects=False)
             except requests.RequestException as error:
                 if self.mode == 'never':
                     reason = 'Local network permission denied' if '10013' in str(error) or 'Permission denied' in str(error) else 'LinkedIn HTTP connection failed or timed out'
@@ -97,6 +104,8 @@ class Fetcher:
                 # A transport failure must still reach the browser fallback.
             if response is not None and response.status_code == 429:
                 raise RateLimited("LinkedIn rate limited this check; remaining companies deferred without retry")
+            if response is not None and (response.status_code in (401,403,999) or 300 <= response.status_code < 400 or wall(response.text)):
+                raise AccessBlocked('LinkedIn requires login or blocked public access; collection stopped without bypass')
             if response is not None and response.ok and not wall(response.text) and "authwall" not in response.url and "/login" not in response.url:
                 return response.text
             if response is not None and response.status_code == 404:
@@ -125,7 +134,7 @@ class Fetcher:
             if response and response.status == 429:
                 raise RateLimited('LinkedIn rate limited browser access; collection stopped without retry')
             if not response or response.status >= 400 or wall(html) or any(s in self.page.url for s in ("/authwall", "/checkpoint", "/login")):
-                raise CollectionError("Browser encountered a challenge, login wall or unavailable page")
+                raise AccessBlocked("Browser encountered a challenge, login wall or unavailable page")
             return html
         except CollectionError:
             raise
@@ -194,14 +203,17 @@ def application_url(soup, fallback):
 def parse_detail(html, card, company):
     soup = BeautifulSoup(html, "html.parser")
     markup = soup.select_one(".show-more-less-html__markup, .description__text")
-    if not markup:
+    closed_element=soup.select_one('.closed-job__flavor')
+    closed=bool(closed_element and re.search(r'no longer accepting applications|no longer available',closed_element.get_text(' ',strip=True),re.I))
+    if not markup and not closed:
         raise CollectionError("Job description was not accessible")
     title = soup.select_one(".top-card-layout__title, h1")
     employer = soup.select_one(".topcard__org-name-link")
     location = soup.select_one(".topcard__flavor--bullet")
     source = f"https://www.linkedin.com/jobs/view/{card['id']}/"
-    description = markup.get_text("\n", strip=True)[:12000]
-    if re.search(r"no longer accepting applications|this job is no longer available", soup.get_text(" ", strip=True), re.I):
+    full_description = re.sub(r'(?:\s*Show more\s*Show less)\s*$', '', markup.get_text("\n", strip=True) if markup else '', flags=re.I).strip()
+    description = full_description[:12000]
+    if closed:
         description = "No longer accepting applications.\n" + description
     slug = company.get('id') or card.get('companyId', '')
     if employer and employer.get('href'):
@@ -217,162 +229,33 @@ def parse_detail(html, card, company):
     logo = soup.select_one('img.topcard__org-logo, img.artdeco-entity-image')
     logo_url = (logo.get('data-delayed-url') or logo.get('src') or '') if logo else ''
     if not re.fullmatch(r'(?:[a-z0-9-]+\.)*licdn\.com', urlparse(logo_url).hostname or '', re.I): logo_url = card.get('companyLogo', '')
-    return {**card, **criteria, "companyLogo": logo_url, "companyUrl": f'https://www.linkedin.com/company/{slug}/' if slug else '', "detailComplete": True, "companyId": slug, "title": title.get_text(" ", strip=True) if title else card["title"], "company": employer.get_text(" ", strip=True) if employer else card["company"], "location": location.get_text(" ", strip=True) if location else card["location"], "sourceUrl": source, "applicationUrl": application_url(soup, source), "description": description}
+    return {**card, **criteria, "availability": "closed" if description.startswith('No longer accepting applications.') else "open", "descriptionTruncated":len(full_description)>12000, "applicationType":"external" if 'linkedin.com' not in (urlparse(application_url(soup,source)).hostname or '') else 'linkedin', "companyLogo": logo_url, "companyUrl": f'https://www.linkedin.com/company/{slug}/' if slug else '', "detailComplete": True, "companyId": slug, "title": title.get_text(" ", strip=True) if title else card["title"], "company": employer.get_text(" ", strip=True) if employer else card["company"], "location": location.get_text(" ", strip=True) if location else card["location"], "sourceUrl": source, "applicationUrl": application_url(soup, source), "description": description}
 
 
-def collect_search(watchlist, keywords=None, location='', browser='auto', pages=3, max_jobs=100, pause=4.0, fetcher=None, cache=None, known_ids=None):
-    """Primary discovery is independent of employer membership in the watchlist."""
-    keywords = keywords or DEFAULT_KEYWORDS
-    if not isinstance(keywords, list) or not 1 <= len(keywords) <= 8 or any(not isinstance(k, str) or not k.strip() or len(k) > 100 for k in keywords):
-        raise CollectionError('Supply 1–8 keywords of at most 100 characters each')
-    companies = {c['id']: c for c in companies_from(watchlist)}
-    disabled = {company_url(c['url']).split('/')[4] for c in watchlist['companies'] if c.get('enabled') is False}
-    cache = cache if cache is not None else {'companies': {}, 'jobs': {}}
-    known = set(known_ids or [])
-    run = {'id': uuid.uuid4().hex, 'mode': 'search', 'startedAt': now(), 'finishedAt': '', 'checked': 0, 'found': 0, 'skippedKnown': 0, 'errors': []}
-    items, seen = [], set()
-    fetcher = fetcher or Fetcher(browser, pause)
-    deadline = time.monotonic() + 40 * 60
-    try:
-        for keyword in keywords:
-            for page in range(pages):
-                if len(items) >= max_jobs or time.monotonic() > deadline:
-                    run['errors'].append({'companyId': 'keyword-search', 'message': 'Candidate or time budget reached; search coverage is partial'})
-                    return {'items': items, 'run': run}
-                try:
-                    query = {'keywords': keyword, 'location': location.strip() or 'Worldwide', 'start': page * 10, 'sortBy': 'DD', 'f_TPR': 'r2592000'}
-                    html = fetcher.get('https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?' + urlencode(query))
-                    cards = job_cards(html)
-                    run['checked'] += 1
-                    if not cards:
-                        if html.strip() and not re.search(r'no (?:matching |results|jobs)|couldn.t find', html, re.I):
-                            raise CollectionError('No recognizable results; coverage is inconclusive')
-                        break
-                    fresh = [c for c in cards if c['id'] not in seen]
-                    if not fresh: break
-                    for card in fresh:
-                        seen.add(card['id'])
-                        if card.get('companyId') in disabled or not DESIGN_SIGNAL.search(card['title']): continue
-                        if card['id'] in known:
-                            run['skippedKnown'] += 1
-                            continue
-                        if len(items) >= max_jobs: break
-                        if time.monotonic() > deadline: raise CollectionError('Time budget reached; search coverage is partial')
-                        company = companies.get(card.get('companyId'), {'id': card.get('companyId', '')})
-                        try:
-                            item = parse_detail(fetcher.get(f"https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/{card['id']}"), card, company)
-                        except RateLimited: raise
-                        except CollectionError as error:
-                            item = {**card, 'detailComplete': False, 'description': '', 'applicationUrl': ''}
-                            run['errors'].append({'companyId': card.get('companyId', ''), 'message': f"Job {card['id']}: {error}"})
-                        item['collectionSource'] = 'search'
-                        items.append(item)
-                    if page == pages - 1:
-                        run['errors'].append({'companyId': 'keyword-search', 'message': f'Pagination cap reached for {keyword}; coverage may be partial'})
-                except RateLimited as error:
-                    run['errors'].append({'companyId': 'keyword-search', 'message': str(error)[:300]})
-                    return {'items': items, 'run': run}
-                except CollectionError as error:
-                    run['errors'].append({'companyId': 'keyword-search', 'message': str(error)[:300]})
-                    break
-    finally:
-        fetcher.close()
-        run['finishedAt'], run['found'] = now(), len(items)
-    return {'items': items, 'run': run}
-
-
-def collect(watchlist, max_companies=5, browser="auto", pages=3, max_jobs=300, pause=4.0, fetcher=None, cache=None, known_ids=None, shard=0, shards=1):
-    cache = cache if cache is not None else {"companies": {}, "jobs": {}}
-    cache.setdefault('companies', {}); cache.setdefault('jobs', {})
-    known_ids = set(known_ids or [])
+def _compat_collect(watchlist,mode,max_companies=5,browser='never',pages=3,max_jobs=100,pause=4,fetcher=None,cache=None,known_ids=None,keywords=None,location='',shard=0,shards=1):
+    """Local companion compatibility; production uses the authenticated checkpoint protocol."""
+    from engine import run_collection
     import hashlib
-    companies = [c for c in companies_from(watchlist) if int(hashlib.sha256(c['id'].encode()).hexdigest(),16) % shards == shard]
-    companies.sort(key=lambda c: cache['companies'].get(c['id'],{}).get('lastChecked',''))
-    companies = companies[:max_companies]
-    run = {"id": uuid.uuid4().hex, "mode": "companies", "startedAt": now(), "finishedAt": "", "checked": 0, "found": 0, "skippedKnown": 0, "cachedDetails": 0, "errors": []}
-    items, seen = [], set()
-    fetcher = fetcher or Fetcher(browser, pause)
-    deadline = time.monotonic() + 40 * 60
-    try:
-        for company in companies:
-            if time.monotonic() > deadline:
-                run["errors"].append({"companyId": company["id"], "message": "Run time budget reached; remaining companies deferred"})
-                break
-            if len(items) >= max_jobs:
-                run["errors"].append({"companyId": company["id"], "message": "Run candidate limit reached; remaining companies deferred"})
-                break
-            run["checked"] += 1
-            try:
-                saved_company=cache['companies'].setdefault(company['id'],{})
-                numeric = company["linkedinId"] or saved_company.get('numericId')
-                if not numeric:
-                    try:
-                        numeric = organization_id(fetcher.get(company['url']))
-                    except RateLimited: raise
-                    except CollectionError:
-                        numeric = organization_id(fetcher.get(company['url'] + 'jobs/'))
-                saved_company['numericId']=numeric
-                page_signatures = set()
-                for page in range(pages):
-                    url = "https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?" + urlencode({"f_C": numeric, "keywords": SEARCH_TERMS, "start": page * 10, "sortBy": "DD", "f_TPR": "r2592000"})
-                    html = fetcher.get(url)
-                    cards = job_cards(html)
-                    signature = tuple(c['id'] for c in cards)
-                    if signature and signature in page_signatures: break
-                    page_signatures.add(signature)
-                    if not cards and page == 0:
-                        # Guest fragments can be empty even when the full public
-                        # results page is available. Try that surface once.
-                        html = fetcher.get('https://www.linkedin.com/jobs/search/?' + urlencode({"f_C": numeric, "keywords": SEARCH_TERMS, "sortBy": "DD", "f_TPR": "r2592000"}))
-                        cards = job_cards(html)
-                    if not cards:
-                        fragment = re.sub(r"<!--.*?-->", "", html, flags=re.S).strip()
-                        if page == 0 and fragment and not re.search(r"no (?:matching |results|jobs)|couldn.t find", html, re.I):
-                            raise CollectionError("No recognizable results; this check is inconclusive")
-                        break
-                    for card in cards:
-                        if time.monotonic() > deadline:
-                            raise CollectionError("Run time budget reached; company coverage is partial")
-                        if card["id"] in seen or not DESIGN_SIGNAL.search(card["title"]):
-                            continue
-                        seen.add(card["id"])
-                        if card['id'] in known_ids:
-                            run['skippedKnown'] += 1
-                            continue
-                        if len(items) >= max_jobs:
-                            break
-                        try:
-                            if card['id'] in cache['jobs']:
-                                item=cache['jobs'][card['id']]
-                                run['cachedDetails'] += 1
-                            else:
-                                item = parse_detail(fetcher.get(f"https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/{card['id']}"), card, company)
-                                cache['jobs'][card['id']]=item
-                        except RateLimited:
-                            raise
-                        except CollectionError as error:
-                            item = {**card, "detailComplete": False, "companyId": company["id"], "description": "", "applicationUrl": ""}
-                            run["errors"].append({"companyId": company["id"], "message": f"Job {card['id']}: {error}"})
-                        item = {**item, 'collectionSource': 'companies'}
-                        items.append(item)
-                    if len(items) >= max_jobs:
-                        run["errors"].append({"companyId": company["id"], "message": "Candidate cap reached; company coverage may be partial"})
-                        break
-                    # Public search currently returns ten cards; a short page is
-                    # not sufficient evidence that pagination is exhausted.
-                    if page == pages - 1:
-                        run["errors"].append({"companyId": company["id"], "message": "Pagination cap reached; company coverage is partial"})
-            except RateLimited as error:
-                run["errors"].append({"companyId": company["id"], "message": str(error)[:300]})
-                break
-            except CollectionError as error:
-                run["errors"].append({"companyId": company["id"], "message": str(error)[:300]})
-            finally:
-                cache['companies'].setdefault(company['id'],{})['lastChecked']=now()
-    finally:
-        fetcher.close()
-    run["finishedAt"], run["found"] = now(), len(items)
-    return {"items": items, "run": run}
+    watchlist={**watchlist,'companies':[c for c in watchlist['companies'] if int(hashlib.sha256(company_url(c['url']).split('/')[4].encode()).hexdigest(),16)%shards==shard]}
+    saved=cache if cache is not None else {'companies':{},'jobs':{}}
+    progress=saved.setdefault('progress',{})
+    for slug,value in saved.get('companies',{}).items():
+        progress.setdefault('company:'+slug,{'page':0,**({'attemptedAt':value['lastChecked']} if value.get('lastChecked') else {}),**({'numericId':value['numericId']} if value.get('numericId') else {})})
+    known=[{'id':ident,'status':'approved','firstSeen':now(),'postedAt':now(),'descriptionLength':120,'applicationUrl':f'https://www.linkedin.com/jobs/view/{ident}/'} for ident in known_ids or []]
+    snapshot={'watchlist':watchlist,'jobs':{'items':known},'queue':{'items':[]},'collector':{'progress':progress}}
+    def checkpoint(body):
+        progress.update(body['progress'])
+        for key,value in body['progress'].items():
+            if key.startswith('company:'):saved.setdefault('companies',{}).setdefault(key[8:],{}).update({'lastChecked':value.get('attemptedAt',''),**({'numericId':value['numericId']} if value.get('numericId') else {})})
+    return run_collection(snapshot,mode=mode,keywords=keywords,location=location,pages=pages,max_companies=max_companies,max_jobs=max_jobs,fetcher=fetcher or Fetcher(browser,pause),callback=checkpoint)
+
+
+def collect_search(watchlist,keywords=None,location='',browser='never',pages=3,max_jobs=100,pause=4,fetcher=None,cache=None,known_ids=None):
+    return _compat_collect(watchlist,'search',browser=browser,pages=pages,max_jobs=max_jobs,pause=pause,fetcher=fetcher,cache=cache,known_ids=known_ids,keywords=keywords,location=location)
+
+
+def collect(watchlist,max_companies=5,browser='never',pages=3,max_jobs=300,pause=4,fetcher=None,cache=None,known_ids=None,shard=0,shards=1):
+    return _compat_collect(watchlist,'companies',max_companies=max_companies,browser=browser,pages=pages,max_jobs=max_jobs,pause=pause,fetcher=fetcher,cache=cache,known_ids=known_ids,shard=shard,shards=shards)
 
 
 def load_cache(path):
@@ -424,7 +307,7 @@ def submit_result(result, url, token):
         raise CollectionError("Result exceeds ingestion limit; decrease max jobs")
     for attempt in range(3):
         try:
-            response = requests.post(url, data=payload, headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json", "Origin": origin}, timeout=60)
+            response = requests.post(url, data=payload, headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json", "Origin": origin}, timeout=60, allow_redirects=False)
             if response.ok:
                 return
             if response.status_code not in (409, 429, 502, 503):
@@ -436,66 +319,71 @@ def submit_result(result, url, token):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--watchlist", type=Path, default=ROOT / "data/watchlist.json")
-    parser.add_argument("--watchlist-url", default=os.getenv("JOBS_WATCHLIST_URL"))
-    parser.add_argument('--mode', choices=['search', 'companies'], default='search')
-    parser.add_argument('--keywords-json', default=os.getenv('JOBS_KEYWORDS_JSON', ''))
-    parser.add_argument('--location', default=os.getenv('JOBS_LOCATION', ''))
-    parser.add_argument('--company', default=os.getenv('JOBS_COMPANY',''), help='Optional active watchlist company slug for a targeted extra scrape')
-    parser.add_argument("--max-companies", type=int, default=5)
-    parser.add_argument("--max-jobs", type=int, default=300)
-    parser.add_argument("--pages", type=int, default=3)
-    parser.add_argument("--browser", choices=["auto", "always", "never"], default="auto")
-    parser.add_argument("--pause", type=float, default=4.0)
-    parser.add_argument("--submit", action="store_true")
-    parser.add_argument('--state-url',default=os.getenv('JOBS_STATE_URL'))
-    parser.add_argument('--cache',type=Path,default=ROOT/'output/collector-cache.json')
-    parser.add_argument('--shard',type=int,default=0)
-    parser.add_argument('--shards',type=int,default=1)
-    args = parser.parse_args()
-    if not 1 <= args.max_companies <= 2000 or not 1 <= args.max_jobs <= 300 or not 1 <= args.pages <= 10 or args.pause < 1 or not 1<=args.shards<=16 or not 0<=args.shard<args.shards:
-        parser.error("Limits: 1–2000 companies, 1–300 jobs, 1–10 pages, pause >= 1 second; valid shard required")
-    if args.watchlist_url:
-        response = requests.get(args.watchlist_url, timeout=30)
-        response.raise_for_status()
-        watchlist = response.json()
+    from engine import run_collection
+    from protocol import CollectorClient, write_summary
+    from logos import LogoCache
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--mode',choices=['search','companies','verify','maintenance'],default='search')
+    parser.add_argument('--watchlist',type=Path,default=ROOT/'data/watchlist.json')
+    parser.add_argument('--watchlist-url',default=os.getenv('JOBS_WATCHLIST_URL'))
+    parser.add_argument('--state-url',default='')
+    parser.add_argument('--keywords-json',default=os.getenv('JOBS_KEYWORDS_JSON',''))
+    parser.add_argument('--location',default=os.getenv('JOBS_LOCATION',''))
+    parser.add_argument('--company',default=os.getenv('JOBS_COMPANY',''))
+    parser.add_argument('--max-companies',type=int,default=5)
+    parser.add_argument('--max-jobs',type=int,default=100)
+    parser.add_argument('--pages',type=int,default=3)
+    parser.add_argument('--request-budget',type=int,default=80)
+    parser.add_argument('--browser',choices=['never','auto'],default='never')
+    parser.add_argument('--pause',type=float,default=4)
+    parser.add_argument('--submit',action='store_true')
+    args=parser.parse_args()
+    if not 1<=args.max_companies<=2000 or not 1<=args.max_jobs<=300 or not 1<=args.pages<=10 or not 1<=args.request_budget<=150 or args.pause<4:
+        parser.error('Use 1–2000 companies, 1–300 jobs, 1–10 pages, 1–150 source requests, and pause >=4 seconds')
+    keywords=json.loads(args.keywords_json) if args.keywords_json else DEFAULT_KEYWORDS
+    if not isinstance(keywords,list) or not 1<=len(keywords)<=8 or any(not isinstance(k,str) or not k.strip() or len(k)>100 for k in keywords):parser.error('Use a JSON array of 1–8 keywords')
+    token=os.getenv('JOBS_INGEST_TOKEN','')
+    client=None
+    if token:
+        client=CollectorClient(os.getenv('JOBS_INGEST_URL',''),token)
+        snapshot=client.start()
     else:
-        watchlist = json.loads(args.watchlist.read_text(encoding="utf-8-sig"))
+        if args.submit or os.getenv('GITHUB_ACTIONS'):raise CollectionError('The authenticated collector connection is required before source requests')
+        if args.watchlist_url:
+            response=requests.get(args.watchlist_url,timeout=30);response.raise_for_status();watchlist=response.json()
+        else:watchlist=json.loads(args.watchlist.read_text(encoding='utf-8-sig'))
+        snapshot={'watchlist':watchlist,'jobs':{'items':[]},'queue':{'items':[]},'collector':{'progress':{}}}
     if args.company:
-        if args.mode != 'companies': raise CollectionError('A targeted company requires companies mode')
-        watchlist = {**watchlist, 'companies':[c for c in watchlist['companies'] if company_url(c['url']).split('/')[4] == args.company]}
-    if args.mode == 'companies' and not companies_from(watchlist):
-        raise CollectionError("Watchlist has no active companies. Add companies in the admin panel first.")
-    known=set()
-    state_url=args.state_url or (urljoin(args.watchlist_url,'state.json') if args.watchlist_url else None)
-    if state_url:
-        response=requests.get(state_url,timeout=30);response.raise_for_status();known=known_jobs(response.json())
-    cache=load_cache(args.cache)
-    if args.mode == 'search':
-        result = collect_search(watchlist, json.loads(args.keywords_json) if args.keywords_json else None, args.location, args.browser, args.pages, args.max_jobs, args.pause, cache=cache, known_ids=known)
-    else:
-        result = collect(watchlist, args.max_companies, args.browser, args.pages, args.max_jobs, args.pause, cache=cache,known_ids=known,shard=args.shard,shards=args.shards)
-    request_id=os.getenv('JOBS_REQUEST_ID','')
-    if request_id:
-        if not re.fullmatch(r'[a-zA-Z0-9_-]{1,100}',request_id): raise CollectionError('Invalid admin request identifier')
-        result['run']['id']=request_id
-    path = save_result(result)
-    save_cache(cache,args.cache)
-    if args.submit:
-        submit_result(result, os.getenv("JOBS_INGEST_URL", ""), os.getenv("JOBS_INGEST_TOKEN", ""))
-    print(f"Mode {args.mode}: {result['run']['checked']} checks; {len(result['items'])} candidates; {len(result['run']['errors'])} failed/partial checks. Saved {path}")
-    summary = os.getenv('GITHUB_STEP_SUMMARY')
-    if summary:
-        with open(summary, 'a', encoding='utf-8') as stream:
-            stream.write(f"## {args.mode} collection\n\n{result['run']['checked']} checks; {len(result['items'])} candidates; {len(result['run']['errors'])} failed/partial checks.\n\n")
-            for item in result['items'][:20]:
-                stream.write(f"- {item['id']}: {item['title']} — {item['company']} ({len(item.get('description',''))} description characters; logo: {bool(item.get('companyLogo'))})\n")
-            for error in result['run']['errors'][:20]: stream.write(f"- Coverage warning: {error['message']}\n")
+        if args.mode!='companies':raise CollectionError('A targeted company requires companies mode')
+        snapshot['watchlist']={**snapshot['watchlist'],'companies':[c for c in snapshot['watchlist']['companies'] if company_url(c['url']).split('/')[4]==args.company]}
+        if not companies_from(snapshot['watchlist']):raise CollectionError('Target company is not active in the watchlist')
+    logos=LogoCache(snapshot.get('logos',{}),snapshot.get('jobs',{}).get('items',[])+snapshot.get('queue',{}).get('items',[]))
+    latest={}
+    final_sent=False
+    def checkpoint(body):
+        nonlocal latest,final_sent
+        if args.submit:logos.enrich(body)
+        latest=body
+        if not args.submit:save_result(body)
+        if args.submit:
+            client.checkpoint(body)
+            if body.get('final'):final_sent=True
+        elif client:client.heartbeat()
+    try:
+        result=run_collection(snapshot,mode=args.mode,keywords=keywords,
+            location=args.location,pages=args.pages,max_companies=args.max_companies,max_jobs=args.max_jobs,
+            request_budget=args.request_budget,fetcher=Fetcher(args.browser,args.pause),callback=checkpoint,session_id=client.id if client else None)
+    finally:
+        if client and not final_sent:client.finish_dry(latest.get('run',{}).get('outcome','failed') if not args.submit else 'blocked' if latest.get('run',{}).get('outcome')=='blocked' or any(p.get('status')=='blocked' for p in latest.get('progress',{}).values()) else 'failed')
+    # Full local recovery output is separate from the last idempotent delivery chunk.
+    (ROOT/'output').mkdir(exist_ok=True)
+    (ROOT/'output/full-result.json').write_text(json.dumps(result,ensure_ascii=False),encoding='utf-8')
+    write_summary(result,args.submit)
+    if result['run']['outcome'] in ('blocked','failed'):raise CollectionError('Collection '+result['run']['outcome']+'; inspect the saved coverage report before retrying')
 
 
 if __name__ == "__main__":
     try:
         main()
-    except (CollectionError, requests.RequestException, ValueError, OSError) as error:
+    except (RuntimeError, requests.RequestException, ValueError, OSError) as error:
         raise SystemExit(str(error)) from None

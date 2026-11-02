@@ -1,4 +1,9 @@
-beautifulsoup4>=4.12,<5
-requests>=2.32,<3
-camoufox==0.5.7
-playwright<1.63
+beautifulsoup4==4.15.0
+requests==2.34.2
+Pillow==12.0.0
+soupsieve==3.0.4
+typing_extensions==4.16.0
+charset_normalizer==3.5.2
+idna==3.20
+urllib3==2.8.0
+certifi==2026.10.23

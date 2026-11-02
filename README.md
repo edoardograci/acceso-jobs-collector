@@ -1,32 +1,51 @@
 # Acceso jobs collector
 
-Manual LinkedIn job discovery for the Acceso admin workspace. Scraping and HTML parsing run on GitHub Actions, independently of the website CPU. No paid API, login credentials, cookies, proxies, CAPTCHA bypass, or scheduled runs.
+Manual, bounded LinkedIn discovery for the Acceso admin. Source requests, parsing and logo normalization run on GitHub Actions. No source account, paid API, proxy, CAPTCHA solver or automatic schedule.
 
-## Two collection modes
+## Run manually
 
-- **search** (primary): public LinkedIn Jobs search filtered by keywords and optional location. Employers do not have to be on the watchlist. Default keywords: industrial designer, CMF designer, footwear designer, structural packaging designer.
-- **companies** (extra): company-filtered public LinkedIn vacancies for active watchlist employers. Small batches rotate by least-recently checked employer using the Actions cache. Company searches supplement the main search; they do not establish exhaustive coverage.
+In Actions → Collect LinkedIn jobs → Run workflow, choose:
 
-## Manual run
+- `search`: worldwide keyword discovery, rotating across saved query/page checkpoints.
+- `companies`: company-filtered public job search. Optionally choose an active watchlist company slug.
+- `verify`: recheck retained jobs whose successful verification is at least seven days old.
+- `maintenance`: apply retention and cache eligible existing logos without making LinkedIn Jobs requests.
 
-Open **Actions → Collect LinkedIn jobs → Run workflow**. Start with one page, 12 jobs and three companies. Keep **Send results to the admin review workspace** off for a dry run. Download the `collection-result` artifact and inspect `result.json`; the workflow summary reports counts, missing details and coverage warnings. Results are retained for one day. The repository contains no collected jobs or credentials. A small bootstrap map of 114 public LinkedIn company IDs reuses earlier resolutions; the active watchlist is read from R2. For a targeted company check, optionally enter its active watchlist slug in the workflow form.
+Start with one page, three companies and five candidates. Enable delivery to update the admin, or leave it off for a dry run. **Both modes acquire the shared lease and respect cooldowns.** Browser fallback is off by default. Public company searches supplement keyword coverage; they are not a guaranteed independent company feed.
 
-Repository variables `JOBS_WATCHLIST_URL` and `JOBS_STATE_URL` point to the public R2 JSON exports. For automatic delivery later, set variable `JOBS_INGEST_URL` to the website's `/api/jobs-collector` endpoint and encrypted Actions secret `JOBS_INGEST_TOKEN` to the same random secret in the website's server settings. Do not put the secret in source code, variables, public JSON or logs. The collector needs no R2 access keys and cannot approve jobs or edit the watchlist.
+## Connection and privacy
 
-## Limits and behavior
+The only required variable is `JOBS_INGEST_URL=https://acceso.design/api/jobs-collector`. Encrypted Actions secret `JOBS_INGEST_TOKEN` matches the website server secret. The collector starts an authenticated session that returns the active watchlist, compact known-job metadata, suppressions and durable progress. It has no R2 credentials and receives no private review notes or full stored descriptions.
 
-One run at a time; a 50-minute workflow timeout; a 40-minute collection budget; at least four seconds between requests. Requests stop without retry on HTTP 429. Public browser fallback is optional and stops at login/challenge pages. Cached complete company-job details avoid repeat fetching. Approved/discarded or complete known records skip detail requests. Incomplete records remain eligible for enrichment. Descriptions are capped at 12,000 characters. Company logos are LinkedIn CDN URLs and may expire. Missing fields are retained for review, never invented. Failed fetches never remove saved jobs.
+Public R2 operational exports are no longer a state source. `JOBS_WATCHLIST_URL` is supported only for standalone local runs without a connected session. Review decisions, collection progress and cooldowns live in the website's private R2 bucket. The public repository contains code and a bootstrap map of public company IDs, never credentials or private workspace data.
 
-Source access may vary by IP address and time. Local success does not guarantee GitHub-hosted access. Partial coverage and blocks are reported in run errors. There is no guarantee of complete LinkedIn coverage or unlimited source requests. Standard GitHub-hosted runners in public repositories follow GitHub's public-repository billing allowances; caches, artifacts and storage still have limits.
+## Reliability and bounds
 
-## Local checks
+- One durable lease, renewed at every page checkpoint. Lost sessions expire after ten minutes.
+- A block or HTTP 429 stops the run and starts a shared six-hour cooldown. Failed runs cool down for fifteen minutes; normal runs for one minute. A new workflow cannot bypass this by restarting.
+- Four seconds between Jobs requests, an 80-fetch default budget, a 35-minute source budget and a 50-minute workflow limit.
+- Each accepted page saves incremental candidates, observations and the cursor atomically with a unique delivery ID. Retried deliveries do not duplicate jobs. A candidate cap preserves the current page; successfully processed pages advance.
+- Keywords and companies rotate by last attempt. Failed scopes get a one-day retry delay; successful coverage is recorded separately from attempts.
+- Source searches cover a 90-day horizon. Public eligibility expires 90 days after original posting, or first discovery if the date is unknown. Rediscovery does not reset age.
+- A small verification pass runs before discovery. Confirmed closure hides a listing; a failed fetch only records unavailable verification. Jobs unverified for fourteen days are excluded from the public feed.
+- Complete known records skip description requests until verification is due. Old full-detail caches are never treated as fresh verification.
+- Source descriptions are cleaned and capped at 12,000 characters with an explicit truncation flag. External application URLs are preferred; otherwise the canonical LinkedIn job is retained.
+- Logos are fetched only from the LinkedIn CDN, without redirects, with byte/pixel limits. At most ten employer logos per run are normalized to metadata-free WebP, uploaded through the authenticated endpoint and deduplicated by content hash in Acceso's R2 bucket. Public jobs use cached URLs or a fallback, never expiring LinkedIn image URLs.
+
+A completed GitHub workflow may still have `partial` coverage when a budget was reached. The summary separates coverage notes from source errors. `blocked` and `failed` outcomes fail the workflow explicitly. No implementation guarantees exhaustive LinkedIn coverage or uninterrupted public access.
+
+## Recovery
+
+One-day artifacts include `result.json` (the latest idempotent checkpoint) and, on a completed run, `full-result.json` (all candidates from that run). Source payloads contain no review decisions. An interrupted run can be recovered through the authenticated admin import. Never replay an expired lease directly; start a new session to resume its durable cursor.
+
+## Local tests
 
 Python 3.12:
 
 ```sh
 python -m pip install -r requirements.txt
-python -m unittest test_scraper.py -v
-python scraper.py --mode search --watchlist-url https://json.acceso.design/jobs/watchlist.json --pages 1 --max-jobs 12 --browser never
+python -m unittest discover -p "test_*.py" -v
+python scraper.py --mode search --watchlist-url https://json.acceso.design/jobs/watchlist.json --pages 1 --max-jobs 5 --browser never
 ```
 
-For the optional public browser fallback, install it with `python -m camoufox fetch` (Linux also needs `python -m playwright install-deps firefox`). Collection only uploads with `--submit`. The admin remains the source of truth for review decisions.
+Core dependencies and workflow actions are pinned. Install `requirements-browser.txt` and fetch Camoufox only when explicitly using the optional public browser transport. Free runner compute for a public repository does not mean unlimited source requests, artifact storage or service allowances.

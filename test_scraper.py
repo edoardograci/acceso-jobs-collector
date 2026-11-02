@@ -62,15 +62,14 @@ class ScraperTests(unittest.TestCase):
         detail=parse_detail(DETAIL+'<li class="description__job-criteria-item"><h3 class="description__job-criteria-subheader">Employment type</h3><span class="description__job-criteria-text">Full-time</span></li>',card,COMPANY)
         self.assertEqual(detail['employmentType'],'Full-time')
 
-    def test_saved_details_are_reused_and_known_ids_skip_detail_requests(self):
+    def test_company_ids_are_cached_but_old_job_details_are_not_reused(self):
         cache={'companies':{},'jobs':{}}
-        first=collect({'version':1,'companies':[COMPANY]},fetcher=FakeFetcher(),cache=cache)
+        first=collect({'version':1,'companies':[COMPANY]},pages=1,fetcher=FakeFetcher(),cache=cache)
         self.assertEqual(len(first['items']),1)
-        fetcher=FakeFetcher(detail=None)
-        second=collect({'version':1,'companies':[COMPANY]},fetcher=fetcher,cache=cache)
-        self.assertEqual(second['run']['cachedDetails'],1)
-        self.assertEqual(second['items'],first['items'])
-        third=collect({'version':1,'companies':[COMPANY]},fetcher=fetcher,cache=cache,known_ids={'12345678'})
+        self.assertEqual(cache['jobs'],{})
+        second=collect({'version':1,'companies':[COMPANY]},pages=1,fetcher=FakeFetcher(detail=None),cache=cache)
+        self.assertFalse(second['items'][0]['detailComplete'])
+        third=collect({'version':1,'companies':[COMPANY]},pages=1,fetcher=FakeFetcher(),cache=cache,known_ids={'12345678'})
         self.assertEqual(third['items'],[])
         self.assertEqual(third['run']['skippedKnown'],1)
 
@@ -128,13 +127,13 @@ class ScraperTests(unittest.TestCase):
         with self.assertRaises(CollectionError): parse_detail('<html>Login</html>', job_cards(CARD)[0], COMPANY)
 
     def test_failed_detail_is_queued_as_incomplete_not_silently_lost(self):
-        result = collect({"version": 1, "companies": [COMPANY]}, fetcher=FakeFetcher(None))
+        result = collect({"version": 1, "companies": [COMPANY]}, pages=1,fetcher=FakeFetcher(None))
         self.assertEqual(len(result["items"]), 1)
         self.assertEqual(result["items"][0]["description"], '')
         self.assertEqual(len(result["run"]["errors"]), 1)
 
     def test_collection_produces_idempotency_key_and_raw_candidates(self):
-        result = collect({"version": 1, "companies": [COMPANY]}, fetcher=FakeFetcher())
+        result = collect({"version": 1, "companies": [COMPANY]}, pages=1,fetcher=FakeFetcher())
         self.assertEqual(result["run"]["checked"], 1)
         self.assertEqual(result["run"]["found"], 1)
         self.assertEqual(result["run"]["errors"], [])
