@@ -240,7 +240,7 @@ def collect_search(watchlist, keywords=None, location='', browser='auto', pages=
                     run['errors'].append({'companyId': 'keyword-search', 'message': 'Candidate or time budget reached; search coverage is partial'})
                     return {'items': items, 'run': run}
                 try:
-                    query = {'keywords': keyword, 'location': location, 'start': page * 10, 'sortBy': 'DD', 'f_TPR': 'r2592000'}
+                    query = {'keywords': keyword, 'location': location.strip() or 'Worldwide', 'start': page * 10, 'sortBy': 'DD', 'f_TPR': 'r2592000'}
                     html = fetcher.get('https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?' + urlencode(query))
                     cards = job_cards(html)
                     run['checked'] += 1
