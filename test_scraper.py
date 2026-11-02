@@ -21,6 +21,17 @@ class FakeFetcher:
 
 
 class ScraperTests(unittest.TestCase):
+    def test_company_jobs_tab_resolves_id_when_profile_omits_it(self):
+        company={**COMPANY,'linkedinId':''}
+        fetcher=FakeFetcher()
+        def get(url):
+            if url==company['url']:return '<h1>Public profile</h1>'
+            if url==company['url']+'jobs/':return '"companyId":123'
+            return DETAIL if 'jobPosting' in url else CARD
+        fetcher.get=Mock(side_effect=get)
+        result=collect({'version':1,'companies':[company]},pages=1,fetcher=fetcher)
+        self.assertEqual(len(result['items']),1)
+        self.assertTrue(any(call.args[0].endswith('/jobs/') for call in fetcher.get.call_args_list))
     def test_primary_search_discovers_companies_outside_watchlist(self):
         fetcher=FakeFetcher()
         fetcher.get=Mock(wraps=fetcher.get)

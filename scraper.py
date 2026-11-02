@@ -304,7 +304,13 @@ def collect(watchlist, max_companies=5, browser="auto", pages=3, max_jobs=300, p
             run["checked"] += 1
             try:
                 saved_company=cache['companies'].setdefault(company['id'],{})
-                numeric = company["linkedinId"] or saved_company.get('numericId') or organization_id(fetcher.get(company["url"]))
+                numeric = company["linkedinId"] or saved_company.get('numericId')
+                if not numeric:
+                    try:
+                        numeric = organization_id(fetcher.get(company['url']))
+                    except RateLimited: raise
+                    except CollectionError:
+                        numeric = organization_id(fetcher.get(company['url'] + 'jobs/'))
                 saved_company['numericId']=numeric
                 page_signatures = set()
                 for page in range(pages):
