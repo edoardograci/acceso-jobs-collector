@@ -21,6 +21,15 @@ class FakeFetcher:
 
 
 class ScraperTests(unittest.TestCase):
+    def test_description_preserves_paragraphs_lists_and_inline_words(self):
+        html = DETAIL.replace('Sketch physical products, build prototypes and collaborate with manufacturing.', '<h2>Responsibilities</h2><p>Design <strong>physical products</strong> with care.</p><ul><li>Sketch concepts</li><li>Build prototypes</li></ul><script>bad()</script>')
+        job = parse_detail(html, {'id':'12345678','title':'Industrial Designer','company':'Fixture','location':'Milan'}, COMPANY)
+        self.assertIn('Design physical products with care.', job['description'])
+        self.assertIn('- Sketch concepts', job['description'])
+        self.assertIn('- Build prototypes', job['description'])
+        self.assertNotIn('bad()', job['description'])
+        self.assertIn('originalDescription', job)
+
     def test_company_jobs_tab_resolves_id_when_profile_omits_it(self):
         company={**COMPANY,'linkedinId':''}
         fetcher=FakeFetcher()

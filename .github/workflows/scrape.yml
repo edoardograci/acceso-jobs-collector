@@ -18,7 +18,11 @@ on:
         type: string
       pages:
         description: Maximum result pages per keyword or company
-        default: '3'
+        default: '1'
+        type: string
+      request_budget:
+        description: Total LinkedIn requests, including detail and verification pages
+        default: '20'
         type: string
       max_jobs:
         description: Maximum new job candidates
@@ -91,10 +95,11 @@ jobs:
           MAX_COMPANIES: ${{ inputs.max_companies }}
           MAX_JOBS: ${{ inputs.max_jobs }}
           PAGES: ${{ inputs.pages }}
+          REQUEST_BUDGET: ${{ inputs.request_budget }}
           BROWSER: ${{ inputs.browser }}
           SUBMIT: ${{ inputs.submit }}
         run: |
-          args=(--mode "$MODE" --max-companies "$MAX_COMPANIES" --max-jobs "$MAX_JOBS" --pages "$PAGES" --browser "$BROWSER")
+          args=(--mode "$MODE" --max-companies "$MAX_COMPANIES" --max-jobs "$MAX_JOBS" --pages "$PAGES" --request-budget "$REQUEST_BUDGET" --browser "$BROWSER")
           if [ "$SUBMIT" = "true" ]; then args+=(--submit); fi
           python scraper.py "${args[@]}"
       - name: Keep collection output for review and recovery

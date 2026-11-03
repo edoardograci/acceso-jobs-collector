@@ -49,3 +49,17 @@ python scraper.py --mode search --watchlist-url https://json.acceso.design/jobs/
 ```
 
 Core dependencies and workflow actions are pinned. Install `requirements-browser.txt` and fetch Camoufox only when explicitly using the optional public browser transport. Free runner compute for a public repository does not mean unlimited source requests, artifact storage or service allowances.
+# Pre-launch validation, 3 November 2026
+
+The four-keyword live test returned 66 candidates from 11 result pages, then
+LinkedIn returned HTTP 429 on request 78. Checkpoints were delivered before the
+stop. This is partial coverage, not proof of reliable unrestricted collection.
+Do not rerun during shared cooldown or interpret the cooldown duration as a
+LinkedIn guarantee. Public workflow defaults now use one page per keyword and a
+20-request total budget (including job details and verification). These are
+conservative starting limits, not a proven safe threshold. Oldest-attempted
+queries rotate first on subsequent manual runs. No schedule is enabled.
+
+Descriptions preserve paragraphs, inline words and list items as plain text;
+the original extraction is sent separately for private editorial comparison.
+The collector never sends the website URL or ingestion credentials to LinkedIn.

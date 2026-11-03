@@ -200,6 +200,26 @@ def application_url(soup, fallback):
     return fallback
 
 
+def description_text(markup):
+    """Preserve paragraph/list boundaries without splitting inline emphasis."""
+    if not markup:
+        return ''
+    for tag in markup.select('script, style, iframe, noscript'):
+        tag.decompose()
+    for br in markup.find_all('br'):
+        br.replace_with('\n')
+    for tag in list(markup.find_all(['p', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'])):
+        if tag.find(['p', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6']):
+            continue
+        text = re.sub(r'[ \t]+', ' ', tag.get_text(' ', strip=True)).strip()
+        tag.replace_with(('\n- ' if tag.name == 'li' else '\n\n') + text + '\n\n')
+    text = markup.get_text(' ', strip=False)
+    text = re.sub(r'[ \t]+', ' ', text)
+    text = re.sub(r' *\n *', '\n', text)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return re.sub(r'(?:\s*Show more\s*Show less)\s*$', '', text, flags=re.I).strip()
+
+
 def parse_detail(html, card, company):
     soup = BeautifulSoup(html, "html.parser")
     markup = soup.select_one(".show-more-less-html__markup, .description__text")
@@ -211,7 +231,8 @@ def parse_detail(html, card, company):
     employer = soup.select_one(".topcard__org-name-link")
     location = soup.select_one(".topcard__flavor--bullet")
     source = f"https://www.linkedin.com/jobs/view/{card['id']}/"
-    full_description = re.sub(r'(?:\s*Show more\s*Show less)\s*$', '', markup.get_text("\n", strip=True) if markup else '', flags=re.I).strip()
+    original_description = markup.get_text("\n", strip=True) if markup else ''
+    full_description = description_text(markup)
     description = full_description[:12000]
     if closed:
         description = "No longer accepting applications.\n" + description
@@ -229,7 +250,7 @@ def parse_detail(html, card, company):
     logo = soup.select_one('img.topcard__org-logo, img.artdeco-entity-image')
     logo_url = (logo.get('data-delayed-url') or logo.get('src') or '') if logo else ''
     if not re.fullmatch(r'(?:[a-z0-9-]+\.)*licdn\.com', urlparse(logo_url).hostname or '', re.I): logo_url = card.get('companyLogo', '')
-    return {**card, **criteria, "availability": "closed" if description.startswith('No longer accepting applications.') else "open", "descriptionTruncated":len(full_description)>12000, "applicationType":"external" if 'linkedin.com' not in (urlparse(application_url(soup,source)).hostname or '') else 'linkedin', "companyLogo": logo_url, "companyUrl": f'https://www.linkedin.com/company/{slug}/' if slug else '', "detailComplete": True, "companyId": slug, "title": title.get_text(" ", strip=True) if title else card["title"], "company": employer.get_text(" ", strip=True) if employer else card["company"], "location": location.get_text(" ", strip=True) if location else card["location"], "sourceUrl": source, "applicationUrl": application_url(soup, source), "description": description}
+    return {**card, **criteria, "availability": "closed" if description.startswith('No longer accepting applications.') else "open", "descriptionTruncated":len(full_description)>12000, "applicationType":"external" if 'linkedin.com' not in (urlparse(application_url(soup,source)).hostname or '') else 'linkedin', "companyLogo": logo_url, "companyUrl": f'https://www.linkedin.com/company/{slug}/' if slug else '', "detailComplete": True, "companyId": slug, "title": title.get_text(" ", strip=True) if title else card["title"], "company": employer.get_text(" ", strip=True) if employer else card["company"], "location": location.get_text(" ", strip=True) if location else card["location"], "sourceUrl": source, "applicationUrl": application_url(soup, source), "description": description, "originalDescription": original_description[:20000]}
 
 
 def _compat_collect(watchlist,mode,max_companies=5,browser='never',pages=3,max_jobs=100,pause=4,fetcher=None,cache=None,known_ids=None,keywords=None,location='',shard=0,shards=1):
